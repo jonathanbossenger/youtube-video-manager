@@ -37,9 +37,22 @@ const captionTrackSchema = z
   .strict()
 
 const queueMetadataShape = {
-  title: z.string().trim().max(100).default(''),
+  title: z
+    .string()
+    .max(100)
+    .transform((value) => value.trim())
+    .default(''),
   description: z.string().max(5000).default(''),
-  tags: z.array(z.string().trim().min(1).max(100)).max(500).default([]),
+  tags: z
+    .array(
+      z
+        .string()
+        .max(100)
+        .transform((value) => value.trim())
+        .refine((value) => value.length > 0, 'Tag cannot be empty')
+    )
+    .max(500)
+    .default([]),
   categoryId: z.string().trim().min(1).nullable().default(null),
   playlistId: z.string().trim().min(1).nullable().default(null),
   privacyStatus: z.enum(['private', 'unlisted', 'public']).default('private'),

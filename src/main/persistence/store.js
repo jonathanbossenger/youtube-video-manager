@@ -1,6 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
-import { queueItemRecordSchema, queueListSchema, authSnapshotSchema, authCredentialsRecordSchema, authSessionRecordSchema, googleDesktopOAuthCredentialsSchema, queueMetadataInputSchema, queueMetadataUpdateSchema, UPLOAD_STEP_NAMES, queueRemovalResultSchema } from '../../shared/youtube-manager-contract.js'
+import {
+  queueItemRecordSchema,
+  queueListSchema,
+  authSnapshotSchema,
+  authCredentialsRecordSchema,
+  authSessionRecordSchema,
+  googleDesktopOAuthCredentialsSchema,
+  queueMetadataInputSchema,
+  queueMetadataUpdateSchema,
+  UPLOAD_STEP_NAMES,
+  queueRemovalResultSchema,
+} from '../../shared/youtube-manager-contract.js'
 
 const DEFAULT_AUTH_SESSION_ID = 1
 const EDITABLE_QUEUE_STATUSES = ['draft', 'ready']
