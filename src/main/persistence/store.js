@@ -16,9 +16,6 @@ import {
 const DEFAULT_AUTH_SESSION_ID = 1
 const EDITABLE_QUEUE_STATUSES = ['draft', 'ready']
 const SCHEMA_SQL = `
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-
   CREATE TABLE IF NOT EXISTS auth_credentials (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     client_id TEXT NOT NULL,
@@ -294,7 +291,37 @@ function mergeQueueMetadata(existingItem, changes) {
 export class YouTubeManagerStore {
   constructor(database) {
     this.database = database
+    this.database.pragma('journal_mode = WAL')
+    this.database.pragma('foreign_keys = ON')
     this.database.exec(SCHEMA_SQL)
+    this.insertUploadStepStatement = this.database.prepare(
+      `
+        INSERT INTO upload_steps (
+          id,
+          queue_item_id,
+          step_name,
+          status,
+          retry_count,
+          last_error,
+          started_at,
+          completed_at,
+          updated_at
+        ) VALUES (@id, @queue_item_id, @step_name, @status, @retry_count, @last_error, @started_at, @completed_at, @updated_at)
+      `
+    )
+    this.insertUploadStepsTransaction = this.database.transaction((stepRows) => {
+      for (const stepRow of stepRows) {
+        this.insertUploadStepStatement.run(stepRow)
+      }
+    })
+    this.reorderQueueItemStatement = this.database.prepare(
+      'UPDATE queue_items SET sort_order = ?, updated_at = ? WHERE id = ?'
+    )
+    this.reorderQueueItemsTransaction = this.database.transaction((orderedIds, timestamp) => {
+      orderedIds.forEach((id, index) => {
+        this.reorderQueueItemStatement.run(index, timestamp, id)
+      })
+    })
   }
 
   close() {
@@ -528,28 +555,7 @@ export class YouTubeManagerStore {
         timestamp
       )
 
-    const insertUploadStep = this.database.prepare(
-      `
-        INSERT INTO upload_steps (
-          id,
-          queue_item_id,
-          step_name,
-          status,
-          retry_count,
-          last_error,
-          started_at,
-          completed_at,
-          updated_at
-        ) VALUES (@id, @queue_item_id, @step_name, @status, @retry_count, @last_error, @started_at, @completed_at, @updated_at)
-      `
-    )
-
-    const insertSteps = this.database.transaction((stepRows) => {
-      for (const stepRow of stepRows) {
-        insertUploadStep.run(stepRow)
-      }
-    })
-    insertSteps(buildStepRows(id, timestamp))
+    this.insertUploadStepsTransaction(buildStepRows(id, timestamp))
 
     return this.getQueueItemById(id)
   }
@@ -569,17 +575,7 @@ export class YouTubeManagerStore {
     }
 
     const timestamp = nowUtc()
-    const updateStatement = this.database.prepare(
-      'UPDATE queue_items SET sort_order = ?, updated_at = ? WHERE id = ?'
-    )
-
-    const transaction = this.database.transaction((orderedIds) => {
-      orderedIds.forEach((id, index) => {
-        updateStatement.run(index, timestamp, id)
-      })
-    })
-
-    transaction(ids)
+    this.reorderQueueItemsTransaction(ids, timestamp)
 
     return this.listQueueItems()
   }
