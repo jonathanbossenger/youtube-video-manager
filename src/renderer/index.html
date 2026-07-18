@@ -3,14 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <!--
-      http-equiv meta CSP is a defence-in-depth fallback.
-      The primary CSP is enforced by the main process via
-      session.defaultSession.webRequest.onHeadersReceived so it cannot
+      http-equiv meta CSP is a defence-in-depth fallback for the most
+      critical directives.  The primary CSP (including connect-src, which
+      differs between dev and production) is enforced by the main process via
+      session.defaultSession.webRequest.onHeadersReceived and therefore cannot
       be removed or weakened by renderer-side code.
+
+      This meta policy intentionally omits connect-src so it does not conflict
+      with the dev-mode header CSP that must allow Vite HMR WebSocket
+      connections on localhost.  In production both policies specify
+      connect-src 'none', making the effective policy maximally restrictive.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none';"
+      content="script-src 'self'; object-src 'none'; base-uri 'self';"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>YouTube Video Manager</title>
