@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-const ABSOLUTE_PATH_REGEX = /^(?:[A-Za-z]:[\\/]|\/)/
+const ABSOLUTE_PATH_REGEX = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/
 const HEX_64_REGEX = /^[a-f0-9]{64}$/i
 
 const absolutePathSchema = z

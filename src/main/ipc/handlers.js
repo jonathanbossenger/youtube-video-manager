@@ -109,16 +109,7 @@ const handlers = {
   },
 
   [CHANNELS.CHANNEL_GET_INFO]: async () => {
-    const authSnapshot = getYouTubeManagerStore().getAuthSnapshot()
-    if (!authSnapshot.session.channelId) {
-      return null
-    }
-
-    return {
-      channelId: authSnapshot.session.channelId,
-      title: 'Authenticated channel',
-      thumbnailUrl: null,
-    }
+    return null
   },
 
   [CHANNELS.QUEUE_LIST]: async () => {

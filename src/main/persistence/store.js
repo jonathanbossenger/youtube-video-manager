@@ -104,6 +104,9 @@ function toNullableText(value) {
 }
 
 function deriveDraftStatus(metadata) {
+  // File existence is validated before insertion, and schedule fields are
+  // enforced by the Zod contract. Title is therefore the remaining piece of
+  // user-authored metadata required before a queue item can become ready.
   return metadata.title ? 'ready' : 'draft'
 }
 
