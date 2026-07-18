@@ -10,7 +10,7 @@
     "preview": "electron-vite preview",
     "rebuild": "electron-rebuild -f",
     "rebuild:sqlite": "electron-rebuild -f -w better-sqlite3",
-    "postinstall": "electron-rebuild -f || true"
+    "postinstall": "node node_modules/electron/install.js || true"
   },
   "dependencies": {
     "react": "^18.3.1",

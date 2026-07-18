@@ -54,3 +54,15 @@ The built application will be in the `release/` directory.
 - `npm run preview` - Preview production build
 - `npm run rebuild` - Rebuild native modules
 - `npm run rebuild:sqlite` - Rebuild better-sqlite3 native module
+
+## Troubleshooting
+
+### `Error: Electron uninstall` when running `npm run dev`
+
+This error means the Electron binary was not downloaded during `npm install` (for example due to a network failure, a proxy, or `--ignore-scripts`). The `postinstall` script runs the Electron binary installer automatically as part of `npm install`, but if it was skipped or failed, run it manually:
+
+```bash
+node node_modules/electron/install.js
+```
+
+Then retry `npm run dev`.
