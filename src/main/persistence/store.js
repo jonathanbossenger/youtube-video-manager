@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { queueItemRecordSchema, queueListSchema, authSnapshotSchema, authCredentialsRecordSchema, authSessionRecordSchema, googleDesktopOAuthCredentialsSchema, queueMetadataInputSchema, queueMetadataUpdateSchema, UPLOAD_STEP_NAMES, queueRemovalResultSchema } from '../../shared/youtube-manager-contract.js'
 
 const DEFAULT_AUTH_SESSION_ID = 1
+const EDITABLE_QUEUE_STATUSES = ['draft', 'ready']
 const SCHEMA_SQL = `
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
@@ -115,16 +116,21 @@ function ensureLocalFile(filePath) {
 }
 
 function createFileFingerprint(filePath, stats) {
-  const hash = createHash('sha256')
-  const fileBuffer = fs.readFileSync(filePath)
-  hash.update(fileBuffer)
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = fs.createReadStream(filePath)
 
-  return {
-    algorithm: 'sha256',
-    digest: hash.digest('hex'),
-    fileSizeBytes: stats.size,
-    lastModifiedUtc: new Date(stats.mtimeMs).toISOString(),
-  }
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('error', reject)
+    stream.on('end', () =>
+      resolve({
+        algorithm: 'sha256',
+        digest: hash.digest('hex'),
+        fileSizeBytes: stats.size,
+        lastModifiedUtc: new Date(stats.mtimeMs).toISOString(),
+      })
+    )
+  })
 }
 
 function buildCaptionTrack(metadata) {
@@ -418,10 +424,10 @@ export class YouTubeManagerStore {
     return rowToQueueItem(row, stepRows)
   }
 
-  addQueueItem(filePath, rawMetadata) {
+  async addQueueItem(filePath, rawMetadata) {
     const metadata = queueMetadataInputSchema.parse(rawMetadata ?? {})
     const stats = ensureLocalFile(filePath)
-    const fingerprint = createFileFingerprint(filePath, stats)
+    const fingerprint = await createFileFingerprint(filePath, stats)
     const timestamp = nowUtc()
     const id = randomUUID()
     const sortOrderRow = this.database
@@ -573,7 +579,7 @@ export class YouTubeManagerStore {
     const mergedMetadata = mergeQueueMetadata(existingItem, queueMetadataUpdateSchema.parse(changes))
     const captionTrack = buildCaptionTrack(mergedMetadata)
     const timestamp = nowUtc()
-    const nextStatus = ['draft', 'ready'].includes(existingItem.status)
+    const nextStatus = EDITABLE_QUEUE_STATUSES.includes(existingItem.status)
       ? deriveDraftStatus(mergedMetadata)
       : existingItem.status
 
