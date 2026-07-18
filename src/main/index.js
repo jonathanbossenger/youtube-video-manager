@@ -102,18 +102,6 @@ function createWindow() {
     },
   })
 
-  // ---- Apply CSP via response-header intercept ----------------------------
-  // Intercepting headers on the defaultSession catches both file:// and
-  // http://localhost:* (dev server) responses.
-  session.defaultSession.webRequest.onHeadersReceived((_details, callback) => {
-    callback({
-      responseHeaders: {
-        ..._details.responseHeaders,
-        'Content-Security-Policy': [isDev ? DEVELOPMENT_CSP : PRODUCTION_CSP],
-      },
-    })
-  })
-
   // ---- Block renderer-initiated navigation --------------------------------
   // Prevent the renderer from navigating away from the app origin.
   win.webContents.on('will-navigate', (event, url) => {
@@ -148,6 +136,20 @@ function createWindow() {
 // ---------------------------------------------------------------------------
 
 app.whenReady().then(() => {
+  // ---- Apply CSP via response-header intercept ----------------------------
+  // Registered once here (not inside createWindow) so that multiple windows
+  // cannot accumulate duplicate global listeners on the defaultSession.
+  // Intercepting headers on the defaultSession catches both file:// and
+  // http://localhost:* (dev server) responses.
+  session.defaultSession.webRequest.onHeadersReceived((_details, callback) => {
+    callback({
+      responseHeaders: {
+        ..._details.responseHeaders,
+        'Content-Security-Policy': [isDev ? DEVELOPMENT_CSP : PRODUCTION_CSP],
+      },
+    })
+  })
+
   setupIpcHandlers()
   createWindow()
 

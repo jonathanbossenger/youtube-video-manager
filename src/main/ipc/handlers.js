@@ -12,6 +12,16 @@ import { CHANNELS, INVOKE_CHANNELS, CHANNEL_VALIDATORS } from './channels.js'
 function createValidatedHandler(channel, handler) {
   const validate = CHANNEL_VALIDATORS[channel]
 
+  // Guard: every declared invoke channel must have a matching validator.
+  // Failing here at registration time (app startup) is far easier to debug
+  // than a runtime TypeError when the channel is actually invoked.
+  if (typeof validate !== 'function') {
+    throw new Error(
+      `[ipc] No validator found for channel "${channel}". ` +
+        'Add an entry to CHANNEL_VALIDATORS in channels.js.'
+    )
+  }
+
   return async (event, payload) => {
     // 1. Validate the payload against the channel contract.
     try {

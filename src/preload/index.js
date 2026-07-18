@@ -30,6 +30,10 @@ function safeInvoke(channel, payload) {
  * @returns {Function}          - Unsubscribe function.
  */
 function safeOn(channel, listener) {
+  if (typeof listener !== 'function') {
+    throw new TypeError(`[preload] Listener for channel "${channel}" must be a function`)
+  }
+
   if (!EVENT_CHANNELS.has(channel)) {
     throw new Error(`[preload] Blocked subscription on unknown event channel: ${channel}`)
   }

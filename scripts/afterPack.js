@@ -11,7 +11,7 @@
  * To rebuild manually during development run:  npm run rebuild
  */
 
-const { execSync } = require('child_process')
+const { spawnSync } = require('child_process')
 const path = require('path')
 
 /**
@@ -27,23 +27,34 @@ exports.default = async function afterPack(context) {
       `on ${electronPlatformName} (${arch}) …`
   )
 
-  try {
-    execSync(
-      [
-        'npx',
-        '@electron/rebuild',
-        '--force',
-        `--electron-version=${electronVersion}`,
-        `--arch=${arch}`,
-        `--module-dir=${path.join(appOutDir, 'resources', 'app')}`,
-      ].join(' '),
-      { stdio: 'inherit', cwd: path.resolve(__dirname, '..') }
-    )
+  // Use spawnSync with an argument array (never a shell-interpolated string)
+  // so that electronVersion, arch, and appOutDir cannot be used for command
+  // injection even if they contain unexpected characters.
+  const moduleDir = path.join(appOutDir, 'resources', 'app')
+  const result = spawnSync(
+    'npx',
+    [
+      '@electron/rebuild',
+      '--force',
+      `--electron-version=${electronVersion}`,
+      `--arch=${arch}`,
+      `--module-dir=${moduleDir}`,
+    ],
+    {
+      stdio: 'inherit',
+      cwd: path.resolve(__dirname, '..'),
+      shell: false,
+    }
+  )
+
+  if (result.error) {
+    console.error('[afterPack] Native module rebuild failed:', result.error.message)
+  } else if (result.status !== 0) {
+    console.error(`[afterPack] Native module rebuild exited with code ${result.status}`)
+  } else {
     console.log('[afterPack] Native module rebuild complete.')
-  } catch (err) {
-    console.error('[afterPack] Native module rebuild failed:', err.message)
-    // Do not throw — allow packaging to continue even if optional native
-    // modules are absent.  The main process handles missing-module errors
-    // gracefully at runtime.
   }
+  // Do not throw — allow packaging to continue even if optional native
+  // modules are absent.  The main process handles missing-module errors
+  // gracefully at runtime.
 }

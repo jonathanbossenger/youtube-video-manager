@@ -66,7 +66,13 @@ export default function App() {
             <li>
               <span className="label">IPC round-trip:</span>
               <span
-                className={`badge ${ipcStatus.includes('✓') ? 'badge--ok' : 'badge--pending'}`}
+                className={`badge ${
+                  ipcStatus?.includes('✓')
+                    ? 'badge--ok'
+                    : ipcStatus?.toLowerCase().includes('error')
+                      ? 'badge--error'
+                      : 'badge--pending'
+                }`}
               >
                 {ipcStatus}
               </span>
