@@ -8,6 +8,16 @@ import {
 } from './channels.js'
 import { getYouTubeManagerStore } from '../persistence/index.js'
 
+function serializeErrorMessage(error) {
+  if (Array.isArray(error?.issues)) {
+    return error.issues
+      .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : 'payload'}: ${issue.message}`)
+      .join('; ')
+  }
+
+  return error instanceof Error ? error.message : String(error)
+}
+
 /**
  * Wraps a handler function with payload validation, response validation, and
  * uniform error serialisation so individual handlers never need to guard
@@ -39,7 +49,7 @@ function createValidatedHandler(channel, handler) {
     try {
       payload = requestSchema.parse(payload)
     } catch (validationError) {
-      return { ok: false, error: validationError.message }
+      return { ok: false, error: serializeErrorMessage(validationError) }
     }
 
     try {
@@ -47,7 +57,7 @@ function createValidatedHandler(channel, handler) {
       return { ok: true, data: responseSchema.parse(result ?? null) }
     } catch (handlerError) {
       console.error(`[ipc] handler error on ${channel}:`, handlerError)
-      return { ok: false, error: handlerError.message }
+      return { ok: false, error: serializeErrorMessage(handlerError) }
     }
   }
 }

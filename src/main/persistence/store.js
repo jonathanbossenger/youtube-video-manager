@@ -737,9 +737,7 @@ export class YouTubeManagerStore {
   }
 
   pauseUpload(id) {
-    this.transitionQueueItemStatus(id, ['uploading'], 'paused', {
-      clearLastError: true,
-    })
+    this.transitionQueueItemStatus(id, ['uploading'], 'paused')
 
     return this.getQueueItemById(id)
   }
@@ -754,7 +752,7 @@ export class YouTubeManagerStore {
   }
 
   cancelUpload(id) {
-    const { timestamp } = this.transitionQueueItemStatus(id, ['uploading'], 'failed', {
+    const { timestamp } = this.transitionQueueItemStatus(id, ['uploading', 'paused'], 'failed', {
       incrementRetryCount: true,
       lastError: 'Upload cancelled by user',
     })
