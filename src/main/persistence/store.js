@@ -357,7 +357,7 @@ export class YouTubeManagerStore {
   _addColumnIfMissing(table, column, type) {
     if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`Invalid table name: ${table}`)
     if (!/^[a-z_][a-z0-9_]*$/i.test(column)) throw new Error(`Invalid column name: ${column}`)
-    const ALLOWED_TYPES = new Set(['TEXT', 'INTEGER', 'REAL', 'BLOB', 'NUMERIC'])
+    const ALLOWED_TYPES = new Set(['TEXT', 'INTEGER', 'REAL', 'BLOB'])
     if (!ALLOWED_TYPES.has(type.toUpperCase()))
       throw new Error(`Invalid SQL type: ${type}`)
     try {
@@ -545,8 +545,11 @@ export class YouTubeManagerStore {
       // A different channel was previously authorized.  Block the switch if
       // there are queued items that belong to the old channel.
       if (this.hasQueueItems()) {
+        // Channel IDs from Google are alphanumeric; we strip any non-word
+        // characters before including in the message as a precaution.
+        const safeId = String(boundChannelId).replace(/[^\w-]/g, '')
         throw new Error(
-          `This app is bound to channel "${boundChannelId}". ` +
+          `This app is bound to channel "${safeId}". ` +
             'Please empty your queue or reset the channel binding before authorizing a different channel.'
         )
       }
