@@ -11,7 +11,7 @@ import { getYouTubeManagerStore } from '../persistence/index.js'
 function serializeErrorMessage(error) {
   if (Array.isArray(error?.issues)) {
     return error.issues
-      .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : 'payload'}: ${issue.message}`)
+      .map((issue) => `${issue.path.length ? issue.path.join('.') : 'payload'}: ${issue.message}`)
       .join('; ')
   }
 
