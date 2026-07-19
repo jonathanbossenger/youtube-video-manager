@@ -122,7 +122,11 @@ const queueMetadataUpdateShape = {
 function validateQueueMetadataUpdate(metadata, context) {
   validateSchedulingMetadata(metadata, context)
 
-  if (Object.values(metadata).every((value) => value === undefined)) {
+  const hasDefinedChange = Object.keys(queueMetadataUpdateShape).some(
+    (key) => metadata[key] !== undefined
+  )
+
+  if (!hasDefinedChange) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'At least one editable queue field must be provided',

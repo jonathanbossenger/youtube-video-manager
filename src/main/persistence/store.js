@@ -737,7 +737,9 @@ export class YouTubeManagerStore {
   }
 
   pauseUpload(id) {
-    this.transitionQueueItemStatus(id, ['uploading'], 'paused')
+    this.transitionQueueItemStatus(id, ['uploading'], 'paused', {
+      clearLastError: true,
+    })
 
     return this.getQueueItemById(id)
   }
