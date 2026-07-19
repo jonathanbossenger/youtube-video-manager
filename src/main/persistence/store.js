@@ -346,12 +346,18 @@ export class YouTubeManagerStore {
   /**
    * Adds a column to an existing table if it does not already exist.
    * SQLite's "duplicate column" error (SQLITE_ERROR) is caught and ignored.
+   * The table name, column name, and type are validated against simple
+   * allowlists to prevent accidental SQL injection should this helper ever
+   * be called with dynamic values.
    *
    * @param {string} table
    * @param {string} column
    * @param {string} type   SQL type string, e.g. 'TEXT'.
    */
   _addColumnIfMissing(table, column, type) {
+    if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`Invalid table name: ${table}`)
+    if (!/^[a-z_][a-z0-9_]*$/i.test(column)) throw new Error(`Invalid column name: ${column}`)
+    if (!/^[A-Z]+$/i.test(type)) throw new Error(`Invalid SQL type: ${type}`)
     try {
       this.database.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run()
     } catch {

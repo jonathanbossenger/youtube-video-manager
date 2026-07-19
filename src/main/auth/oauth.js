@@ -25,8 +25,25 @@ function generatePKCE() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Escapes a string for safe insertion into HTML content.
+ * Prevents reflected XSS from OAuth callback query parameters.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
  * Builds a minimal HTML page to display in the user's browser after the
- * OAuth redirect completes.
+ * OAuth redirect completes.  Both `heading` and `message` must be pre-escaped
+ * or consist only of trusted static strings.
  */
 function buildResponsePage(heading, message, success) {
   const color = success ? '#1a7f37' : '#cf222e'
@@ -210,11 +227,12 @@ export async function performOAuthFlow(credentials) {
       const errorDesc = urlObj.searchParams.get('error_description')
 
       if (error) {
+        const safeDetail = escapeHtml(errorDesc ?? error)
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(
           buildResponsePage(
             'Authorization failed',
-            'Google returned an error: ' + (errorDesc ?? error) + '. You can close this tab.',
+            'Google returned an error: ' + safeDetail + '. You can close this tab.',
             false
           )
         )

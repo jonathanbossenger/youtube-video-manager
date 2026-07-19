@@ -42,9 +42,9 @@ export default function App() {
     setError(null)
     setImportLoading(true)
     try {
-      const dialogRes = await window.youtubeManager.openFileDialog([
-        { name: 'JSON credentials', extensions: ['json'] },
-      ])
+      const dialogRes = await window.youtubeManager.openFileDialog({
+        filters: [{ name: 'JSON credentials', extensions: ['json'] }],
+      })
       if (!dialogRes.ok) {
         setError(dialogRes.error ?? 'File dialog failed.')
         return

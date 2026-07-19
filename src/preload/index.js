@@ -88,8 +88,8 @@ const youtubeManagerAPI = {
 
   // ---- Native dialogs -----------------------------------------------------
 
-  openFileDialog: (filters) =>
-    safeInvoke(CHANNELS.DIALOG_OPEN_FILE, filters ? { filters } : undefined),
+  openFileDialog: (options) =>
+    safeInvoke(CHANNELS.DIALOG_OPEN_FILE, options ?? undefined),
 
   // ---- Queue management ---------------------------------------------------
 
