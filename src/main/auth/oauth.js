@@ -21,11 +21,11 @@ function generatePKCE() {
 }
 
 // ---------------------------------------------------------------------------
-// Response page
+// HTML helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Escapes a string for safe insertion into HTML content.
+ * Escapes a string for safe insertion into HTML text content.
  * Prevents reflected XSS from OAuth callback query parameters.
  *
  * @param {string} str
@@ -42,8 +42,8 @@ function escapeHtml(str) {
 
 /**
  * Builds a minimal HTML page to display in the user's browser after the
- * OAuth redirect completes.  Both `heading` and `message` must be pre-escaped
- * or consist only of trusted static strings.
+ * OAuth redirect completes.  The `message` parameter MUST be HTML-escaped by
+ * the caller before being passed in.
  */
 function buildResponsePage(heading, message, success) {
   const color = success ? '#1a7f37' : '#cf222e'
@@ -52,7 +52,7 @@ function buildResponsePage(heading, message, success) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>${heading} \u2014 YouTube Video Manager</title>
+  <title>${escapeHtml(heading)} \u2014 YouTube Video Manager</title>
   <style>
     body { font-family: system-ui, sans-serif; display: flex; align-items: center;
            justify-content: center; min-height: 100vh; margin: 0; background: #f6f8fa; }
@@ -64,7 +64,7 @@ function buildResponsePage(heading, message, success) {
 </head>
 <body>
   <div class="card">
-    <h1>${heading}</h1>
+    <h1>${escapeHtml(heading)}</h1>
     <p>${message}</p>
   </div>
 </body>
@@ -165,12 +165,15 @@ async function fetchChannelIdentity(accessToken) {
  * (installed-app) credential set.
  *
  * Flow:
- *  1. Generate PKCE verifier/challenge and a random CSRF state token.
- *  2. Start a loopback HTTP callback server on an OS-assigned free port.
- *  3. Open the Google authorization URL in the system browser.
- *  4. Wait for the authorization code callback (up to 5 minutes).
- *  5. Exchange the code for tokens at the token endpoint.
- *  6. Fetch the authenticated YouTube channel identity.
+ *  Phase 1 — Create the loopback callback server with request handler and
+ *             wait for it to emit the 'listening' event so the port is
+ *             guaranteed to be bound before the browser is opened.
+ *  Phase 2 — Build the Google authorization URL (using the OS-assigned port)
+ *             and open it in the system browser.
+ *  Phase 3 — Wait for the browser to deliver the authorization code to the
+ *             loopback callback server (up to 5 minutes).
+ *  Phase 4 — Exchange the code for tokens at the token endpoint.
+ *  Phase 5 — Fetch the authenticated YouTube channel identity.
  *
  * @param {{
  *   clientId: string,
@@ -188,99 +191,119 @@ export async function performOAuthFlow(credentials) {
   const { verifier, challenge } = generatePKCE()
   const state = randomBytes(16).toString('base64url')
 
-  // ---- Start loopback callback server ------------------------------------
-  // The server listens on port 0 so the OS assigns a free port immediately.
-  // We open the browser AFTER the server is listening so the redirect URI is
-  // guaranteed to be accepting connections.
-  const { code, port } = await new Promise((outerResolve, outerReject) => {
-    let server
-    let settled = false
-    let timer
+  // ---- Phase 1: Create callback server and wait for 'listening' ----------
+  // The settle helpers allow the request handler (created before we know the
+  // port) and the timeout (set after the port is known) to share a single
+  // resolution path via the codePromise below.
+  let settled = false
+  let resolveCode, rejectCode, timer
 
-    function settle(fn, value) {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (server) server.close()
-      fn(value)
+  /** Resolves codePromise with the authorization code. */
+  function settleWithCode(code) {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    server.close()
+    resolveCode(code)
+  }
+
+  /** Rejects codePromise with an error. */
+  function settleWithError(err) {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    server.close()
+    rejectCode(err)
+  }
+
+  const codePromise = new Promise((res, rej) => {
+    resolveCode = res
+    rejectCode = rej
+  })
+
+  const server = createHttpServer((req, res) => {
+    let urlObj
+    try {
+      urlObj = new URL(req.url, 'http://127.0.0.1')
+    } catch {
+      res.writeHead(400)
+      res.end('Bad request')
+      return
     }
 
-    server = createHttpServer((req, res) => {
-      let urlObj
-      try {
-        urlObj = new URL(req.url, 'http://127.0.0.1')
-      } catch {
-        res.writeHead(400)
-        res.end('Bad request')
-        return
-      }
+    if (urlObj.pathname !== '/oauth/callback') {
+      res.writeHead(404)
+      res.end('Not found')
+      return
+    }
 
-      if (urlObj.pathname !== '/oauth/callback') {
-        res.writeHead(404)
-        res.end('Not found')
-        return
-      }
+    const code = urlObj.searchParams.get('code')
+    const returnedState = urlObj.searchParams.get('state')
+    const error = urlObj.searchParams.get('error')
+    const errorDesc = urlObj.searchParams.get('error_description')
 
-      const code = urlObj.searchParams.get('code')
-      const returnedState = urlObj.searchParams.get('state')
-      const error = urlObj.searchParams.get('error')
-      const errorDesc = urlObj.searchParams.get('error_description')
-
-      if (error) {
-        const safeDetail = escapeHtml(errorDesc ?? error)
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(
-          buildResponsePage(
-            'Authorization failed',
-            'Google returned an error: ' + safeDetail + '. You can close this tab.',
-            false
-          )
-        )
-        settle(outerReject, new Error('OAuth authorization denied: ' + (errorDesc ?? error)))
-        return
-      }
-
-      if (returnedState !== state) {
-        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(
-          buildResponsePage('Invalid request', 'State mismatch. You can close this tab.', false)
-        )
-        settle(outerReject, new Error('OAuth state mismatch \u2014 possible CSRF attack'))
-        return
-      }
-
-      if (!code) {
-        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(buildResponsePage('Missing code', 'No authorization code received.', false))
-        settle(outerReject, new Error('OAuth callback did not include an authorization code'))
-        return
-      }
-
+    if (error) {
+      const safeDetail = escapeHtml(errorDesc ?? error)
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(
         buildResponsePage(
-          'Authorization complete',
-          'You can close this tab and return to YouTube Video Manager.',
-          true
+          'Authorization failed',
+          'Google returned an error: ' + safeDetail + '. You can close this tab.',
+          false
         )
       )
-      settle(outerResolve, { code, port: server.address().port })
-    })
+      settleWithError(new Error('OAuth authorization denied: ' + (errorDesc ?? error)))
+      return
+    }
 
-    timer = setTimeout(
-      () => settle(outerReject, new Error('OAuth authorization timed out after 5 minutes')),
-      OAUTH_TIMEOUT_MS
+    if (returnedState !== state) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(
+        buildResponsePage('Invalid request', 'State mismatch. You can close this tab.', false)
+      )
+      settleWithError(new Error('OAuth state mismatch \u2014 possible CSRF attack'))
+      return
+    }
+
+    if (!code) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(buildResponsePage('Missing code', 'No authorization code received.', false))
+      settleWithError(new Error('OAuth callback did not include an authorization code'))
+      return
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    res.end(
+      buildResponsePage(
+        'Authorization complete',
+        'You can close this tab and return to YouTube Video Manager.',
+        true
+      )
     )
-
-    server.on('error', (err) => settle(outerReject, err))
-
-    // Port 0 lets the OS assign any available port.
-    server.listen(0, '127.0.0.1')
+    settleWithCode(code)
   })
 
+  server.on('error', settleWithError)
+
+  // Wait for the 'listening' event so that the port is bound and the server
+  // is guaranteed to accept connections before we open the browser.
+  await new Promise((res, rej) => {
+    server.once('error', rej)
+    server.once('listening', () => res())
+    server.listen(0, '127.0.0.1') // Port 0 lets the OS assign a free port.
+  })
+
+  const port = server.address().port
+
+  // Set the timeout now that the server is listening.
+  timer = setTimeout(
+    () => settleWithError(new Error('OAuth authorization timed out after 5 minutes')),
+    OAUTH_TIMEOUT_MS
+  )
+
+  // ---- Phase 2: Build authorization URL and open the system browser ------
   const redirectUri = 'http://127.0.0.1:' + port + '/oauth/callback'
 
-  // ---- Build authorization URL ------------------------------------------
   const authUrl = new URL(credentials.authUri)
   authUrl.searchParams.set('response_type', 'code')
   authUrl.searchParams.set('client_id', credentials.clientId)
@@ -292,13 +315,15 @@ export async function performOAuthFlow(credentials) {
   authUrl.searchParams.set('access_type', 'offline')
   authUrl.searchParams.set('prompt', 'consent') // always request a refresh token
 
-  // ---- Open system browser -----------------------------------------------
   await shell.openExternal(authUrl.toString())
 
-  // ---- Exchange code for tokens ------------------------------------------
+  // ---- Phase 3: Wait for the authorization code --------------------------
+  const code = await codePromise
+
+  // ---- Phase 4: Exchange the code for tokens ----------------------------
   const tokens = await exchangeCodeForTokens(credentials, code, redirectUri, verifier)
 
-  // ---- Fetch channel identity --------------------------------------------
+  // ---- Phase 5: Fetch the authenticated channel identity ----------------
   const channel = await fetchChannelIdentity(tokens.access_token)
 
   return { channel, tokens }

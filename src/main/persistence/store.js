@@ -357,7 +357,9 @@ export class YouTubeManagerStore {
   _addColumnIfMissing(table, column, type) {
     if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`Invalid table name: ${table}`)
     if (!/^[a-z_][a-z0-9_]*$/i.test(column)) throw new Error(`Invalid column name: ${column}`)
-    if (!/^[A-Z]+$/i.test(type)) throw new Error(`Invalid SQL type: ${type}`)
+    const ALLOWED_TYPES = new Set(['TEXT', 'INTEGER', 'REAL', 'BLOB', 'NUMERIC'])
+    if (!ALLOWED_TYPES.has(type.toUpperCase()))
+      throw new Error(`Invalid SQL type: ${type}`)
     try {
       this.database.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run()
     } catch {
