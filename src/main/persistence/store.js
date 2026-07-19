@@ -6,6 +6,7 @@ import {
   authSnapshotSchema,
   authCredentialsRecordSchema,
   authSessionRecordSchema,
+  channelInfoSchema,
   googleDesktopOAuthCredentialsSchema,
   queueMetadataInputSchema,
   queueMetadataUpdateSchema,
@@ -298,6 +299,12 @@ export class YouTubeManagerStore {
     this.database.pragma('journal_mode = WAL')
     this.database.pragma('foreign_keys = ON')
     this.database.exec(SCHEMA_SQL)
+
+    // ---- Schema migrations -------------------------------------------------
+    // SQLite does not support `ALTER TABLE ADD COLUMN IF NOT EXISTS`, so we
+    // attempt each addition and silently ignore the "duplicate column" error.
+    this._addColumnIfMissing('auth_session', 'channel_title', 'TEXT')
+    this._addColumnIfMissing('auth_session', 'channel_thumbnail_url', 'TEXT')
     this.insertUploadStepStatement = this.database.prepare(
       `
         INSERT INTO upload_steps (
@@ -330,6 +337,26 @@ export class YouTubeManagerStore {
 
   close() {
     this.database.close()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Schema migration helper
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Adds a column to an existing table if it does not already exist.
+   * SQLite's "duplicate column" error (SQLITE_ERROR) is caught and ignored.
+   *
+   * @param {string} table
+   * @param {string} column
+   * @param {string} type   SQL type string, e.g. 'TEXT'.
+   */
+  _addColumnIfMissing(table, column, type) {
+    try {
+      this.database.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run()
+    } catch {
+      // Column already exists — ignore.
+    }
   }
 
   ensureAuthSessionRow() {
@@ -432,6 +459,180 @@ export class YouTubeManagerStore {
           UPDATE auth_session
           SET
             channel_id = NULL,
+            scopes_json = '[]',
+            refresh_token_ciphertext = NULL,
+            access_token_expires_at = NULL,
+            last_authenticated_at = NULL,
+            updated_at = ?
+          WHERE id = ?
+        `
+      )
+      .run(timestamp, DEFAULT_AUTH_SESSION_ID)
+
+    return this.getAuthSnapshot()
+  }
+
+  /**
+   * Returns the raw `installed` block from the stored OAuth credentials JSON,
+   * including the client_secret needed for token exchange.
+   * Returns null if no credentials have been imported.
+   *
+   * @returns {{ clientId:string, clientSecret?:string, authUri:string, tokenUri:string } | null}
+   */
+  getRawCredentials() {
+    const row = this.database
+      .prepare('SELECT raw_json FROM auth_credentials WHERE id = 1')
+      .get()
+
+    if (!row?.raw_json) {
+      return null
+    }
+
+    try {
+      const parsed = googleDesktopOAuthCredentialsSchema.parse(JSON.parse(row.raw_json))
+      const inst = parsed.installed
+      return {
+        clientId: inst.client_id,
+        clientSecret: inst.client_secret ?? undefined,
+        authUri: inst.auth_uri,
+        tokenUri: inst.token_uri,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Persists a completed OAuth session.  When `refreshTokenCiphertext` is null
+   * (safeStorage unavailable) the DB row is stored without a token so the app
+   * knows a session exists but must use the in-memory token instead.
+   *
+   * Also verifies channel binding: if a different channelId was previously
+   * bound and the queue is non-empty, an error is thrown — the caller must
+   * either empty the queue or call `resetChannelBinding` first.
+   *
+   * @param {{
+   *   channelId: string,
+   *   channelTitle: string,
+   *   channelThumbnailUrl: string | null,
+   *   refreshTokenCiphertext: string | null,
+   *   scopes: string[],
+   *   accessTokenExpiresAt: string | null,
+   * }} sessionData
+   * @returns {ReturnType<getAuthSnapshot>}
+   */
+  saveSession({
+    channelId,
+    channelTitle,
+    channelThumbnailUrl,
+    refreshTokenCiphertext,
+    scopes,
+    accessTokenExpiresAt,
+  }) {
+    // ---- Channel binding check --------------------------------------------
+    const existingRow = this.ensureAuthSessionRow()
+    const boundChannelId = existingRow.channel_id ?? null
+
+    if (boundChannelId && boundChannelId !== channelId) {
+      // A different channel was previously authorized.  Block the switch if
+      // there are queued items that belong to the old channel.
+      if (this.hasQueueItems()) {
+        throw new Error(
+          `This app is bound to channel "${boundChannelId}". ` +
+            'Please empty your queue or reset the channel binding before authorizing a different channel.'
+        )
+      }
+    }
+
+    const timestamp = nowUtc()
+
+    this.database
+      .prepare(
+        `
+          UPDATE auth_session
+          SET
+            channel_id = ?,
+            channel_title = ?,
+            channel_thumbnail_url = ?,
+            scopes_json = ?,
+            refresh_token_ciphertext = ?,
+            access_token_expires_at = ?,
+            last_authenticated_at = ?,
+            updated_at = ?
+          WHERE id = ?
+        `
+      )
+      .run(
+        channelId,
+        channelTitle,
+        channelThumbnailUrl ?? null,
+        JSON.stringify(scopes),
+        refreshTokenCiphertext ?? null,
+        accessTokenExpiresAt ?? null,
+        timestamp,
+        timestamp,
+        DEFAULT_AUTH_SESSION_ID
+      )
+
+    return this.getAuthSnapshot()
+  }
+
+  /**
+   * Returns channel info for the currently bound channel, or null if no
+   * channel has been authorized yet.
+   *
+   * @returns {{ channelId:string, title:string, thumbnailUrl:string|null } | null}
+   */
+  getChannelInfo() {
+    const row = this.database
+      .prepare('SELECT channel_id, channel_title, channel_thumbnail_url FROM auth_session WHERE id = ?')
+      .get(DEFAULT_AUTH_SESSION_ID)
+
+    if (!row?.channel_id) {
+      return null
+    }
+
+    return channelInfoSchema.parse({
+      channelId: row.channel_id,
+      title: row.channel_title ?? '',
+      thumbnailUrl: row.channel_thumbnail_url ?? null,
+    })
+  }
+
+  /**
+   * Returns true if there are any queue items present.
+   *
+   * @returns {boolean}
+   */
+  hasQueueItems() {
+    const row = this.database
+      .prepare('SELECT COUNT(*) AS count FROM queue_items')
+      .get()
+
+    return (row?.count ?? 0) > 0
+  }
+
+  /**
+   * Clears the channel binding and empties the entire queue so the user can
+   * authorize a different channel.  This is the "explicit local queue reset"
+   * required by the channel-binding policy.
+   *
+   * @returns {ReturnType<getAuthSnapshot>}
+   */
+  resetChannelBinding() {
+    const timestamp = nowUtc()
+
+    // Remove all queue items (cascade deletes upload_steps rows too).
+    this.database.prepare('DELETE FROM queue_items').run()
+
+    this.database
+      .prepare(
+        `
+          UPDATE auth_session
+          SET
+            channel_id = NULL,
+            channel_title = NULL,
+            channel_thumbnail_url = NULL,
             scopes_json = '[]',
             refresh_token_ciphertext = NULL,
             access_token_expires_at = NULL,

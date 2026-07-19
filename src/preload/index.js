@@ -84,6 +84,12 @@ const youtubeManagerAPI = {
   // ---- Channel info -------------------------------------------------------
 
   getChannelInfo: () => safeInvoke(CHANNELS.CHANNEL_GET_INFO),
+  resetChannelBinding: () => safeInvoke(CHANNELS.CHANNEL_RESET_BINDING),
+
+  // ---- Native dialogs -----------------------------------------------------
+
+  openFileDialog: (filters) =>
+    safeInvoke(CHANNELS.DIALOG_OPEN_FILE, filters ? { filters } : undefined),
 
   // ---- Queue management ---------------------------------------------------
 

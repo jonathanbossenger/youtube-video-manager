@@ -354,6 +354,22 @@ export const REQUEST_SCHEMAS = {
   AUTH_GET_STATUS: z.undefined().optional(),
   AUTH_SIGN_OUT: z.undefined().optional(),
   CHANNEL_GET_INFO: z.undefined().optional(),
+  CHANNEL_RESET_BINDING: z.undefined().optional(),
+  DIALOG_OPEN_FILE: z
+    .object({
+      filters: z
+        .array(
+          z
+            .object({
+              name: z.string().min(1),
+              extensions: z.array(z.string().min(1)).min(1),
+            })
+            .strict()
+        )
+        .optional(),
+    })
+    .strict()
+    .optional(),
   QUEUE_LIST: z.undefined().optional(),
   QUEUE_ADD: z
     .object({
@@ -398,15 +414,12 @@ export const RESPONSE_SCHEMAS = {
   APP_PING: z.literal('pong'),
   APP_GET_VERSION: versionInfoSchema,
   AUTH_IMPORT_CREDENTIALS: authSnapshotSchema,
-  AUTH_START_OAUTH: z
-    .object({
-      supported: z.boolean(),
-      message: z.string(),
-    })
-    .strict(),
+  AUTH_START_OAUTH: authSnapshotSchema,
   AUTH_GET_STATUS: authSnapshotSchema,
   AUTH_SIGN_OUT: authSnapshotSchema,
   CHANNEL_GET_INFO: channelInfoSchema,
+  CHANNEL_RESET_BINDING: authSnapshotSchema,
+  DIALOG_OPEN_FILE: z.string().min(1).nullable(),
   QUEUE_LIST: queueListSchema,
   QUEUE_ADD: queueItemRecordSchema,
   QUEUE_REMOVE: queueRemovalResultSchema,
@@ -447,9 +460,11 @@ export const YOUTUBE_MANAGER_API_CONTRACT = Object.freeze({
       responseSchema: 'AuthSnapshot',
     },
     startOAuth: {
-      description: 'Reserved hook for the future OAuth flow entry point.',
+      description:
+        'Launches browser-based OAuth 2.0 PKCE authorization, exchanges the code for tokens, ' +
+        'stores the session (encrypted when safeStorage is available), and returns the updated auth state.',
       requestSchema: 'void',
-      responseSchema: 'OAuthStartResult',
+      responseSchema: 'AuthSnapshot',
     },
     getAuthStatus: {
       description: 'Returns validated credential and session status.',
@@ -465,6 +480,17 @@ export const YOUTUBE_MANAGER_API_CONTRACT = Object.freeze({
       description: 'Returns the active channel metadata when available.',
       requestSchema: 'void',
       responseSchema: 'ChannelInfo | null',
+    },
+    resetChannelBinding: {
+      description:
+        'Clears the bound channel ID and empties the queue so a different channel can be authorized.',
+      requestSchema: 'void',
+      responseSchema: 'AuthSnapshot',
+    },
+    openFileDialog: {
+      description: 'Opens a native file-picker dialog and returns the selected absolute path.',
+      requestSchema: 'DialogOpenFilePayload?',
+      responseSchema: 'string | null',
     },
     listQueue: {
       description: 'Lists persisted queue records in user-defined order.',

@@ -1,4 +1,4 @@
-import { ipcMain, app } from 'electron'
+import { ipcMain, app, dialog } from 'electron'
 import {
   CHANNELS,
   INVOKE_CHANNELS,
@@ -7,6 +7,13 @@ import {
   CHANNEL_EVENT_SCHEMAS,
 } from './channels.js'
 import { getYouTubeManagerStore } from '../persistence/index.js'
+import { performOAuthFlow } from '../auth/oauth.js'
+import {
+  isEncryptionAvailable,
+  encryptToken,
+  setInMemoryToken,
+  clearInMemoryToken,
+} from '../auth/token-storage.js'
 
 function serializeErrorMessage(error) {
   if (Array.isArray(error?.issues)) {
@@ -107,21 +114,78 @@ const handlers = {
     return getYouTubeManagerStore().importCredentials(payload.filePath)
   },
 
-  [CHANNELS.AUTH_START_OAUTH]: async () => ({
-    supported: false,
-    message: 'OAuth flow is not implemented yet.',
-  }),
+  [CHANNELS.AUTH_START_OAUTH]: async () => {
+    const store = getYouTubeManagerStore()
+    const credentials = store.getRawCredentials()
+
+    if (!credentials) {
+      throw new Error(
+        'No OAuth credentials found. ' +
+          'Please import a Google Desktop OAuth JSON file before signing in.'
+      )
+    }
+
+    const { channel, tokens } = await performOAuthFlow(credentials)
+
+    // Determine how to store the refresh token.
+    let refreshTokenCiphertext = null
+
+    if (tokens.refresh_token) {
+      if (isEncryptionAvailable()) {
+        // Secure path: encrypt and persist the token.
+        refreshTokenCiphertext = encryptToken(tokens.refresh_token)
+      } else {
+        // Fallback: keep the token in memory only for this session.
+        setInMemoryToken(tokens.refresh_token)
+        console.warn(
+          '[auth] safeStorage is unavailable — refresh token retained in memory only.'
+        )
+      }
+    }
+
+    // Compute token expiry timestamp.
+    const accessTokenExpiresAt = tokens.expires_in
+      ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+      : null
+
+    const scopes = tokens.scope ? tokens.scope.split(' ') : []
+
+    return store.saveSession({
+      channelId: channel.channelId,
+      channelTitle: channel.title,
+      channelThumbnailUrl: channel.thumbnailUrl,
+      refreshTokenCiphertext,
+      scopes,
+      accessTokenExpiresAt,
+    })
+  },
 
   [CHANNELS.AUTH_GET_STATUS]: async () => {
     return getYouTubeManagerStore().getAuthSnapshot()
   },
 
   [CHANNELS.AUTH_SIGN_OUT]: async () => {
+    clearInMemoryToken()
     return getYouTubeManagerStore().clearAuthState()
   },
 
   [CHANNELS.CHANNEL_GET_INFO]: async () => {
-    return null
+    return getYouTubeManagerStore().getChannelInfo()
+  },
+
+  [CHANNELS.CHANNEL_RESET_BINDING]: async () => {
+    clearInMemoryToken()
+    return getYouTubeManagerStore().resetChannelBinding()
+  },
+
+  [CHANNELS.DIALOG_OPEN_FILE]: async (_event, payload) => {
+    const filters = payload?.filters ?? [{ name: 'All Files', extensions: ['*'] }]
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters,
+    })
+
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
   },
 
   [CHANNELS.QUEUE_LIST]: async () => {

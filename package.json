@@ -50,6 +50,8 @@
     "afterPack": "scripts/afterPack.js"
   },
   "allowScripts": {
-    "electron@35.7.5": true
+    "electron@35.7.5": true,
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.25.12": true
   }
 }
