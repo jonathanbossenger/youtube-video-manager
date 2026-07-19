@@ -140,22 +140,4 @@ export const CHANNEL_EVENT_SCHEMAS = {
   [CHANNELS.UPLOAD_STATUS_CHANGED]: EVENT_SCHEMAS.UPLOAD_STATUS_CHANGED,
 }
 
-// ---------------------------------------------------------------------------
-// Payload validators
-// ---------------------------------------------------------------------------
-
-function buildSchemaValidator(channel, schema) {
-  return (payload) => {
-    schema.parse(payload)
-    return true
-  }
-}
-
-export const CHANNEL_VALIDATORS = Object.fromEntries(
-  Object.entries(CHANNEL_REQUEST_SCHEMAS).map(([channel, schema]) => [
-    channel,
-    buildSchemaValidator(channel, schema),
-  ])
-)
-
 export { YOUTUBE_MANAGER_API_CONTRACT }

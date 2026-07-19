@@ -118,6 +118,10 @@ function deriveDraftStatus(metadata) {
   return metadata.title ? 'ready' : 'draft'
 }
 
+function formatTransitionError(id, currentStatus, nextStatus) {
+  return `Cannot transition queue item ${id} from "${currentStatus}" to "${nextStatus}"`
+}
+
 function ensureLocalFile(filePath) {
   const stats = fs.statSync(filePath)
   if (!stats.isFile()) {
@@ -465,6 +469,48 @@ export class YouTubeManagerStore {
     return rowToQueueItem(row, stepRows)
   }
 
+  getRequiredQueueItem(id) {
+    const item = this.getQueueItemById(id)
+    if (!item) {
+      throw new Error(`Queue item not found: ${id}`)
+    }
+
+    return item
+  }
+
+  transitionQueueItemStatus(
+    id,
+    allowedCurrentStatuses,
+    nextStatus,
+    { clearLastError = false, lastError, incrementRetryCount = false } = {}
+  ) {
+    const item = this.getRequiredQueueItem(id)
+    if (!allowedCurrentStatuses.includes(item.status)) {
+      throw new Error(formatTransitionError(id, item.status, nextStatus))
+    }
+
+    const timestamp = nowUtc()
+    const assignments = ['status = ?', 'updated_at = ?']
+    const params = [nextStatus, timestamp]
+
+    if (clearLastError) {
+      assignments.push('last_error = NULL')
+    } else if (lastError !== undefined) {
+      assignments.push('last_error = ?')
+      params.push(lastError)
+    }
+
+    if (incrementRetryCount) {
+      assignments.push('retry_count = retry_count + 1')
+    }
+
+    this.database
+      .prepare(`UPDATE queue_items SET ${assignments.join(', ')} WHERE id = ?`)
+      .run(...params, id)
+
+    return { item, timestamp }
+  }
+
   async addQueueItem(filePath, rawMetadata) {
     const metadata = queueMetadataInputSchema.parse(rawMetadata ?? {})
     const stats = ensureLocalFile(filePath)
@@ -678,64 +724,34 @@ export class YouTubeManagerStore {
       return null
     }
 
-    const timestamp = nowUtc()
-    this.database
-      .prepare(
-        `
-          UPDATE queue_items
-          SET status = 'uploading', last_error = NULL, updated_at = ?
-          WHERE id = ?
-        `
-      )
-      .run(timestamp, candidate.id)
+    const { timestamp } = this.transitionQueueItemStatus(candidate.id, ['ready'], 'uploading', {
+      clearLastError: true,
+    })
     this.updateStepState(candidate.id, 'video_upload', 'in_progress', { startedAt: timestamp })
 
     return this.getQueueItemById(candidate.id)
   }
 
   pauseUpload(id) {
-    const item = this.getQueueItemById(id)
-    if (!item) {
-      throw new Error(`Queue item not found: ${id}`)
-    }
-
-    this.database
-      .prepare('UPDATE queue_items SET status = ?, updated_at = ? WHERE id = ?')
-      .run('paused', nowUtc(), id)
+    this.transitionQueueItemStatus(id, ['uploading'], 'paused')
 
     return this.getQueueItemById(id)
   }
 
   resumeUpload(id) {
-    const item = this.getQueueItemById(id)
-    if (!item) {
-      throw new Error(`Queue item not found: ${id}`)
-    }
-
-    this.database
-      .prepare('UPDATE queue_items SET status = ?, last_error = NULL, updated_at = ? WHERE id = ?')
-      .run('uploading', nowUtc(), id)
+    this.transitionQueueItemStatus(id, ['paused'], 'uploading', {
+      clearLastError: true,
+    })
     this.updateStepState(id, 'video_upload', 'in_progress')
 
     return this.getQueueItemById(id)
   }
 
   cancelUpload(id) {
-    const item = this.getQueueItemById(id)
-    if (!item) {
-      throw new Error(`Queue item not found: ${id}`)
-    }
-
-    const timestamp = nowUtc()
-    this.database
-      .prepare(
-        `
-          UPDATE queue_items
-          SET status = 'failed', retry_count = retry_count + 1, last_error = ?, updated_at = ?
-          WHERE id = ?
-        `
-      )
-      .run('Upload cancelled by user', timestamp, id)
+    const { timestamp } = this.transitionQueueItemStatus(id, ['uploading'], 'failed', {
+      incrementRetryCount: true,
+      lastError: 'Upload cancelled by user',
+    })
     this.updateStepState(id, 'video_upload', 'failed', {
       lastError: 'Upload cancelled by user',
       completedAt: timestamp,

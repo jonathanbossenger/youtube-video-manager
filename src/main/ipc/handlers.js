@@ -2,7 +2,7 @@ import { ipcMain, app } from 'electron'
 import {
   CHANNELS,
   INVOKE_CHANNELS,
-  CHANNEL_VALIDATORS,
+  CHANNEL_REQUEST_SCHEMAS,
   CHANNEL_RESPONSE_SCHEMAS,
   CHANNEL_EVENT_SCHEMAS,
 } from './channels.js'
@@ -18,13 +18,13 @@ import { getYouTubeManagerStore } from '../persistence/index.js'
  * @returns {Function}       - Validated handler suitable for ipcMain.handle.
  */
 function createValidatedHandler(channel, handler) {
-  const validate = CHANNEL_VALIDATORS[channel]
+  const requestSchema = CHANNEL_REQUEST_SCHEMAS[channel]
   const responseSchema = CHANNEL_RESPONSE_SCHEMAS[channel]
 
-  if (typeof validate !== 'function') {
+  if (!requestSchema) {
     throw new Error(
-      `[ipc] No validator found for channel "${channel}". ` +
-        'Add an entry to CHANNEL_VALIDATORS in channels.js.'
+      `[ipc] No request schema found for channel "${channel}". ` +
+        'Add an entry to CHANNEL_REQUEST_SCHEMAS in channels.js.'
     )
   }
 
@@ -37,7 +37,7 @@ function createValidatedHandler(channel, handler) {
 
   return async (event, payload) => {
     try {
-      validate(payload)
+      payload = requestSchema.parse(payload)
     } catch (validationError) {
       return { ok: false, error: validationError.message }
     }
@@ -73,7 +73,9 @@ function emitUploadProgress(sender, queueItem) {
   emitValidatedEvent(sender, CHANNELS.UPLOAD_PROGRESS, {
     id: queueItem.id,
     bytesUploaded: queueItem.resumableSession?.uploadedBytes ?? 0,
-    totalBytes: queueItem.asset.fingerprint.fileSizeBytes,
+    totalBytes:
+      queueItem.resumableSession?.totalBytes ??
+      queueItem.asset.fingerprint.fileSizeBytes,
   })
 }
 

@@ -36,13 +36,12 @@ const captionTrackSchema = z
   })
   .strict()
 
-const queueMetadataShape = {
+const queueMetadataFieldSchemas = {
   title: z
     .string()
     .max(100)
-    .transform((value) => value.trim())
-    .default(''),
-  description: z.string().max(5000).default(''),
+    .transform((value) => value.trim()),
+  description: z.string().max(5000),
   tags: z
     .array(
       z
@@ -51,18 +50,33 @@ const queueMetadataShape = {
         .transform((value) => value.trim())
         .refine((value) => value.length > 0, 'Tag cannot be empty')
     )
-    .max(500)
-    .default([]),
-  categoryId: z.string().trim().min(1).nullable().default(null),
-  playlistId: z.string().trim().min(1).nullable().default(null),
-  privacyStatus: z.enum(['private', 'unlisted', 'public']).default('private'),
-  madeForKids: z.boolean().default(false),
-  notifySubscribers: z.boolean().default(true),
-  thumbnailPath: nullableAbsolutePathSchema.default(null),
-  captionTrack: captionTrackSchema.nullable().default(null),
-  publishAtUtc: nullableUtcDateTimeSchema.default(null),
-  sourceTimezone: z.string().trim().min(1).nullable().default(null),
-  syntheticMedia: z.boolean().default(false),
+    .max(500),
+  categoryId: z.string().trim().min(1).nullable(),
+  playlistId: z.string().trim().min(1).nullable(),
+  privacyStatus: z.enum(['private', 'unlisted', 'public']),
+  madeForKids: z.boolean(),
+  notifySubscribers: z.boolean(),
+  thumbnailPath: nullableAbsolutePathSchema,
+  captionTrack: captionTrackSchema.nullable(),
+  publishAtUtc: nullableUtcDateTimeSchema,
+  sourceTimezone: z.string().trim().min(1).nullable(),
+  syntheticMedia: z.boolean(),
+}
+
+const queueMetadataShape = {
+  title: queueMetadataFieldSchemas.title.default(''),
+  description: queueMetadataFieldSchemas.description.default(''),
+  tags: queueMetadataFieldSchemas.tags.default([]),
+  categoryId: queueMetadataFieldSchemas.categoryId.default(null),
+  playlistId: queueMetadataFieldSchemas.playlistId.default(null),
+  privacyStatus: queueMetadataFieldSchemas.privacyStatus.default('private'),
+  madeForKids: queueMetadataFieldSchemas.madeForKids.default(false),
+  notifySubscribers: queueMetadataFieldSchemas.notifySubscribers.default(true),
+  thumbnailPath: queueMetadataFieldSchemas.thumbnailPath.default(null),
+  captionTrack: queueMetadataFieldSchemas.captionTrack.default(null),
+  publishAtUtc: queueMetadataFieldSchemas.publishAtUtc.default(null),
+  sourceTimezone: queueMetadataFieldSchemas.sourceTimezone.default(null),
+  syntheticMedia: queueMetadataFieldSchemas.syntheticMedia.default(false),
 }
 
 const baseQueueMetadataInputSchema = z.object(queueMetadataShape).strict()
@@ -89,33 +103,37 @@ export const queueMetadataInputSchema = baseQueueMetadataInputSchema.superRefine
   validateSchedulingMetadata
 )
 
-export const queueMetadataUpdateSchema = z
-  .object({
-    title: queueMetadataShape.title.optional(),
-    description: queueMetadataShape.description.optional(),
-    tags: queueMetadataShape.tags.optional(),
-    categoryId: queueMetadataShape.categoryId.optional(),
-    playlistId: queueMetadataShape.playlistId.optional(),
-    privacyStatus: queueMetadataShape.privacyStatus.optional(),
-    madeForKids: queueMetadataShape.madeForKids.optional(),
-    notifySubscribers: queueMetadataShape.notifySubscribers.optional(),
-    thumbnailPath: queueMetadataShape.thumbnailPath.optional(),
-    captionTrack: queueMetadataShape.captionTrack.optional(),
-    publishAtUtc: queueMetadataShape.publishAtUtc.optional(),
-    sourceTimezone: queueMetadataShape.sourceTimezone.optional(),
-    syntheticMedia: queueMetadataShape.syntheticMedia.optional(),
-  })
-  .strict()
-  .superRefine((metadata, context) => {
-    validateSchedulingMetadata(metadata, context)
+const queueMetadataUpdateShape = {
+  title: queueMetadataFieldSchemas.title.optional(),
+  description: queueMetadataFieldSchemas.description.optional(),
+  tags: queueMetadataFieldSchemas.tags.optional(),
+  categoryId: queueMetadataFieldSchemas.categoryId.optional(),
+  playlistId: queueMetadataFieldSchemas.playlistId.optional(),
+  privacyStatus: queueMetadataFieldSchemas.privacyStatus.optional(),
+  madeForKids: queueMetadataFieldSchemas.madeForKids.optional(),
+  notifySubscribers: queueMetadataFieldSchemas.notifySubscribers.optional(),
+  thumbnailPath: queueMetadataFieldSchemas.thumbnailPath.optional(),
+  captionTrack: queueMetadataFieldSchemas.captionTrack.optional(),
+  publishAtUtc: queueMetadataFieldSchemas.publishAtUtc.optional(),
+  sourceTimezone: queueMetadataFieldSchemas.sourceTimezone.optional(),
+  syntheticMedia: queueMetadataFieldSchemas.syntheticMedia.optional(),
+}
 
-    if (Object.keys(metadata).length === 0) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'At least one editable queue field must be provided',
-      })
-    }
-  })
+function validateQueueMetadataUpdate(metadata, context) {
+  validateSchedulingMetadata(metadata, context)
+
+  if (!Object.values(metadata).some((value) => value !== undefined)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'At least one editable queue field must be provided',
+    })
+  }
+}
+
+export const queueMetadataUpdateSchema = z
+  .object(queueMetadataUpdateShape)
+  .strict()
+  .superRefine(validateQueueMetadataUpdate)
 
 export const UPLOAD_STATES = [
   'draft',
@@ -357,30 +375,12 @@ export const REQUEST_SCHEMAS = {
   QUEUE_UPDATE: z
     .object({
       id: idSchema,
-      title: queueMetadataShape.title.optional(),
-      description: queueMetadataShape.description.optional(),
-      tags: queueMetadataShape.tags.optional(),
-      categoryId: queueMetadataShape.categoryId.optional(),
-      playlistId: queueMetadataShape.playlistId.optional(),
-      privacyStatus: queueMetadataShape.privacyStatus.optional(),
-      madeForKids: queueMetadataShape.madeForKids.optional(),
-      notifySubscribers: queueMetadataShape.notifySubscribers.optional(),
-      thumbnailPath: queueMetadataShape.thumbnailPath.optional(),
-      captionTrack: queueMetadataShape.captionTrack.optional(),
-      publishAtUtc: queueMetadataShape.publishAtUtc.optional(),
-      sourceTimezone: queueMetadataShape.sourceTimezone.optional(),
-      syntheticMedia: queueMetadataShape.syntheticMedia.optional(),
+      ...queueMetadataUpdateShape,
     })
     .strict()
     .superRefine((payload, context) => {
       const { id: _id, ...changes } = payload
-      const parsedChanges = queueMetadataUpdateSchema.safeParse(changes)
-
-      if (!parsedChanges.success) {
-        for (const issue of parsedChanges.error.issues) {
-          context.addIssue(issue)
-        }
-      }
+      validateQueueMetadataUpdate(changes, context)
     }),
   UPLOAD_START: z.undefined().optional(),
   UPLOAD_PAUSE: z.object({ id: idSchema }).strict(),
