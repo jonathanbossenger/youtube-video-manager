@@ -484,6 +484,10 @@ export class YouTubeManagerStore {
     nextStatus,
     { clearLastError = false, lastError, incrementRetryCount = false } = {}
   ) {
+    if (allowedCurrentStatuses.length === 0) {
+      throw new Error(`No allowed current statuses configured for transition to "${nextStatus}"`)
+    }
+
     const item = this.getRequiredQueueItem(id)
     if (!allowedCurrentStatuses.includes(item.status)) {
       throw new Error(formatTransitionError(id, item.status, nextStatus))
