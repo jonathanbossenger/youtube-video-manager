@@ -1,170 +1,187 @@
 import { ipcMain, app } from 'electron'
-import { CHANNELS, INVOKE_CHANNELS, CHANNEL_VALIDATORS } from './channels.js'
+import {
+  CHANNELS,
+  INVOKE_CHANNELS,
+  CHANNEL_REQUEST_SCHEMAS,
+  CHANNEL_RESPONSE_SCHEMAS,
+  CHANNEL_EVENT_SCHEMAS,
+} from './channels.js'
+import { getYouTubeManagerStore } from '../persistence/index.js'
+
+function serializeErrorMessage(error) {
+  if (Array.isArray(error?.issues)) {
+    return error.issues
+      .map((issue) => `${issue.path.length ? issue.path.join('.') : 'payload'}: ${issue.message}`)
+      .join('; ')
+  }
+
+  return error instanceof Error ? error.message : String(error)
+}
 
 /**
- * Wraps a handler function with payload validation and uniform error
- * serialisation so individual handlers never need to guard themselves.
+ * Wraps a handler function with payload validation, response validation, and
+ * uniform error serialisation so individual handlers never need to guard
+ * themselves.
  *
  * @param {string} channel   - The IPC channel name.
  * @param {Function} handler - Async function (event, payload) => result.
  * @returns {Function}       - Validated handler suitable for ipcMain.handle.
  */
 function createValidatedHandler(channel, handler) {
-  const validate = CHANNEL_VALIDATORS[channel]
+  const requestSchema = CHANNEL_REQUEST_SCHEMAS[channel]
+  const responseSchema = CHANNEL_RESPONSE_SCHEMAS[channel]
 
-  // Guard: every declared invoke channel must have a matching validator.
-  // Failing here at registration time (app startup) is far easier to debug
-  // than a runtime TypeError when the channel is actually invoked.
-  if (typeof validate !== 'function') {
+  if (!requestSchema) {
     throw new Error(
-      `[ipc] No validator found for channel "${channel}". ` +
-        'Add an entry to CHANNEL_VALIDATORS in channels.js.'
+      `[ipc] No request schema found for channel "${channel}". ` +
+        'Add an entry to CHANNEL_REQUEST_SCHEMAS in channels.js.'
+    )
+  }
+
+  if (!responseSchema) {
+    throw new Error(
+      `[ipc] No response schema found for channel "${channel}". ` +
+        'Add an entry to CHANNEL_RESPONSE_SCHEMAS in channels.js.'
     )
   }
 
   return async (event, payload) => {
-    // 1. Validate the payload against the channel contract.
     try {
-      validate(payload)
+      payload = requestSchema.parse(payload)
     } catch (validationError) {
-      return { ok: false, error: validationError.message }
+      return { ok: false, error: serializeErrorMessage(validationError) }
     }
 
-    // 2. Execute the handler and catch any unexpected errors.
     try {
       const result = await handler(event, payload)
-      return { ok: true, data: result ?? null }
+      return { ok: true, data: responseSchema.parse(result ?? null) }
     } catch (handlerError) {
       console.error(`[ipc] handler error on ${channel}:`, handlerError)
-      return { ok: false, error: handlerError.message }
+      return { ok: false, error: serializeErrorMessage(handlerError) }
     }
   }
+}
+
+function emitValidatedEvent(sender, channel, payload) {
+  const schema = CHANNEL_EVENT_SCHEMAS[channel]
+  if (!schema) {
+    throw new Error(`[ipc] No event schema found for channel "${channel}"`)
+  }
+
+  sender.send(channel, schema.parse(payload))
+}
+
+function emitStatusChanged(sender, queueItem) {
+  emitValidatedEvent(sender, CHANNELS.UPLOAD_STATUS_CHANGED, {
+    id: queueItem.id,
+    status: queueItem.status,
+    error: queueItem.lastError,
+  })
+}
+
+function emitUploadProgress(sender, queueItem) {
+  emitValidatedEvent(sender, CHANNELS.UPLOAD_PROGRESS, {
+    id: queueItem.id,
+    bytesUploaded: queueItem.resumableSession?.uploadedBytes ?? 0,
+    totalBytes:
+      queueItem.resumableSession?.totalBytes ??
+      queueItem.asset.fingerprint.fileSizeBytes,
+  })
 }
 
 // ---------------------------------------------------------------------------
 // Handler implementations
 // ---------------------------------------------------------------------------
-// All handlers that require filesystem, SQLite, OAuth, or YouTube API access
-// MUST be placed here in the main process. The renderer never obtains direct
-// access to these capabilities — it communicates exclusively via IPC.
-// ---------------------------------------------------------------------------
 
 const handlers = {
-  // ---- App utility --------------------------------------------------------
+  [CHANNELS.APP_PING]: async () => 'pong',
 
-  [CHANNELS.APP_PING]: async (_event, _payload) => {
-    return 'pong'
+  [CHANNELS.APP_GET_VERSION]: async () => ({
+    app: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+  }),
+
+  [CHANNELS.AUTH_IMPORT_CREDENTIALS]: async (_event, payload) => {
+    return getYouTubeManagerStore().importCredentials(payload.filePath)
   },
 
-  [CHANNELS.APP_GET_VERSION]: async (_event, _payload) => {
-    return {
-      app: app.getVersion(),
-      electron: process.versions.electron,
-      chrome: process.versions.chrome,
-      node: process.versions.node,
+  [CHANNELS.AUTH_START_OAUTH]: async () => ({
+    supported: false,
+    message: 'OAuth flow is not implemented yet.',
+  }),
+
+  [CHANNELS.AUTH_GET_STATUS]: async () => {
+    return getYouTubeManagerStore().getAuthSnapshot()
+  },
+
+  [CHANNELS.AUTH_SIGN_OUT]: async () => {
+    return getYouTubeManagerStore().clearAuthState()
+  },
+
+  [CHANNELS.CHANNEL_GET_INFO]: async () => {
+    return null
+  },
+
+  [CHANNELS.QUEUE_LIST]: async () => {
+    return getYouTubeManagerStore().listQueueItems()
+  },
+
+  [CHANNELS.QUEUE_ADD]: async (_event, payload) => {
+    return getYouTubeManagerStore().addQueueItem(payload.filePath, payload.metadata)
+  },
+
+  [CHANNELS.QUEUE_REMOVE]: async (_event, payload) => {
+    return getYouTubeManagerStore().removeQueueItem(payload.id)
+  },
+
+  [CHANNELS.QUEUE_REORDER]: async (_event, payload) => {
+    return getYouTubeManagerStore().reorderQueue(payload.ids)
+  },
+
+  [CHANNELS.QUEUE_UPDATE]: async (_event, payload) => {
+    const { id, ...changes } = payload
+    return getYouTubeManagerStore().updateQueueItem(id, changes)
+  },
+
+  [CHANNELS.UPLOAD_START]: async (event) => {
+    const queueItem = getYouTubeManagerStore().startNextUpload()
+    if (queueItem) {
+      emitStatusChanged(event.sender, queueItem)
+      emitUploadProgress(event.sender, queueItem)
     }
+    return queueItem
   },
 
-  // ---- Auth  (stubs — implementation deferred to auth issue) --------------
-
-  [CHANNELS.AUTH_IMPORT_CREDENTIALS]: async (_event, _payload) => {
-    // TODO: read the JSON file at payload.filePath, validate its shape,
-    //       store encrypted credentials with safeStorage.
-    throw new Error('Not yet implemented')
+  [CHANNELS.UPLOAD_PAUSE]: async (event, payload) => {
+    const queueItem = getYouTubeManagerStore().pauseUpload(payload.id)
+    emitStatusChanged(event.sender, queueItem)
+    return queueItem
   },
 
-  [CHANNELS.AUTH_START_OAUTH]: async (_event, _payload) => {
-    // TODO: launch PKCE flow in the system browser with a loopback redirect.
-    throw new Error('Not yet implemented')
+  [CHANNELS.UPLOAD_RESUME]: async (event, payload) => {
+    const queueItem = getYouTubeManagerStore().resumeUpload(payload.id)
+    emitStatusChanged(event.sender, queueItem)
+    emitUploadProgress(event.sender, queueItem)
+    return queueItem
   },
 
-  [CHANNELS.AUTH_GET_STATUS]: async (_event, _payload) => {
-    // TODO: return { authenticated: bool, channelId: string | null }
-    return { authenticated: false, channelId: null }
+  [CHANNELS.UPLOAD_CANCEL]: async (event, payload) => {
+    const queueItem = getYouTubeManagerStore().cancelUpload(payload.id)
+    emitStatusChanged(event.sender, queueItem)
+    return queueItem
   },
 
-  [CHANNELS.AUTH_SIGN_OUT]: async (_event, _payload) => {
-    // TODO: revoke token, clear safeStorage entry.
-    throw new Error('Not yet implemented')
-  },
+  [CHANNELS.METADATA_GET_CATEGORIES]: async () => [],
 
-  // ---- Channel info  (stub) -----------------------------------------------
-
-  [CHANNELS.CHANNEL_GET_INFO]: async (_event, _payload) => {
-    // TODO: call YouTube API channels.list with stored credentials.
-    throw new Error('Not yet implemented')
-  },
-
-  // ---- Queue  (stubs) -----------------------------------------------------
-
-  [CHANNELS.QUEUE_LIST]: async (_event, _payload) => {
-    // TODO: query SQLite queue table.
-    return []
-  },
-
-  [CHANNELS.QUEUE_ADD]: async (_event, _payload) => {
-    // TODO: insert record into SQLite, fingerprint the file.
-    throw new Error('Not yet implemented')
-  },
-
-  [CHANNELS.QUEUE_REMOVE]: async (_event, _payload) => {
-    // TODO: remove record from SQLite.
-    throw new Error('Not yet implemented')
-  },
-
-  [CHANNELS.QUEUE_REORDER]: async (_event, _payload) => {
-    // TODO: update sort order in SQLite.
-    throw new Error('Not yet implemented')
-  },
-
-  [CHANNELS.QUEUE_UPDATE]: async (_event, _payload) => {
-    // TODO: update editable metadata in SQLite.
-    throw new Error('Not yet implemented')
-  },
-
-  // ---- Upload control  (stubs) --------------------------------------------
-
-  [CHANNELS.UPLOAD_START]: async (_event, _payload) => {
-    // TODO: begin sequential upload from queue.
-    throw new Error('Not yet implemented')
-  },
-
-  [CHANNELS.UPLOAD_PAUSE]: async (_event, _payload) => {
-    throw new Error('Not yet implemented')
-  },
-
-  [CHANNELS.UPLOAD_RESUME]: async (_event, _payload) => {
-    throw new Error('Not yet implemented')
-  },
-
-  [CHANNELS.UPLOAD_CANCEL]: async (_event, _payload) => {
-    throw new Error('Not yet implemented')
-  },
-
-  // ---- Metadata  (stubs) --------------------------------------------------
-
-  [CHANNELS.METADATA_GET_CATEGORIES]: async (_event, _payload) => {
-    // TODO: return cached / refreshed YouTube video categories.
-    return []
-  },
-
-  [CHANNELS.METADATA_GET_PLAYLISTS]: async (_event, _payload) => {
-    // TODO: return cached / refreshed playlists for the active channel.
-    return []
-  },
+  [CHANNELS.METADATA_GET_PLAYLISTS]: async () => [],
 }
 
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
-/**
- * Registers a validated ipcMain.handle for every channel defined in
- * INVOKE_CHANNELS.  Call once during app 'ready'.
- *
- * Only channels listed in INVOKE_CHANNELS are registered; any channel
- * not in that set will simply receive no response from the main process.
- */
 export function setupIpcHandlers() {
   for (const channel of INVOKE_CHANNELS) {
     const handler = handlers[channel]
